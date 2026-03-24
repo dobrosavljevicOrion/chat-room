@@ -16,6 +16,20 @@ init() ->
 
 loop(State) ->
     receive
+        {Pid, Ref, {join, Name}} ->
+            case lists:any(fun(U) -> U#user.name =:= Name end, State) of
+                true ->
+                    Pid ! {Ref, {error, username_taken}},
+                    loop(State);
+                false ->
+                    User = #user{name = Name, pid = Pid},
+                    link(Pid),
+                    lists:foreach(fun(U) ->
+                        U#user.pid ! {user_joined, Name}
+                    end, State),
+                    Pid ! {Ref, {ok, joined}},
+                    loop([User | State])
+            end;
         shutdown ->
             io:format("Server shutting down~n"),
             ok;
@@ -26,3 +40,13 @@ loop(State) ->
 
 terminate() -> 
     chat_server ! shutdown.
+
+join(Name) ->
+    Ref = make_ref(),
+    chat_server ! {self(), Ref, {join, Name}},
+    receive
+        {Ref, Reply} ->
+            Reply
+    after 5000 ->
+        {error, timeout}
+    end.
