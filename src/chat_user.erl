@@ -20,5 +20,8 @@ loop(Name) ->
     receive
         {user_joined, OtherName} ->
             io:format("Server tells User ~s: User ~s has joined the room.~n", [Name, OtherName]),
+            loop(Name);
+        {user_disconnected, OtherName} ->
+            io:format("Server tells User ~s: User ~s has disconnected.~n", [Name, OtherName]),
             loop(Name)
     end.

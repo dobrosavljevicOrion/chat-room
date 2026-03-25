@@ -30,6 +30,19 @@ loop(State) ->
                     Pid ! {Ref, {ok, joined}},
                     loop([User | State])
             end;
+        {'EXIT', Pid, Reason} ->
+            {RemovedName, NewState} = remove_user_by_pid(Pid, State),
+            case RemovedName of
+                not_found ->
+                    io:format("Received EXIT from unknown pid ~p, reason: ~p~n", [Pid, Reason]),
+                    loop(State);
+                _ ->
+                    lists:foreach(fun(U) ->
+                        U#user.pid ! {user_disconnected, RemovedName}
+                    end, NewState),
+                    io:format("User ~s crashes/exits.~n", [RemovedName]),
+                    loop(NewState)
+            end;
         shutdown ->
             io:format("Server shutting down~n"),
             ok;
@@ -49,4 +62,16 @@ join(Name) ->
             Reply
     after 5000 ->
         {error, timeout}
+    end.
+
+remove_user_by_pid(Pid, State) ->
+    remove_user_by_pid(Pid, State, []).
+remove_user_by_pid(_, [], Acc) ->
+    {not_found, lists:reverse(Acc)};
+remove_user_by_pid(Pid, [U | Rest], Acc) ->
+    case U#user.pid =:= Pid of
+        true ->
+            {U#user.name, lists:reverse(Acc) ++ Rest};
+        false ->
+            remove_user_by_pid(Pid, Rest, [U | Acc])
     end.
