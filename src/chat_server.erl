@@ -5,10 +5,10 @@
 -compile(export_all).
 
 start() ->
-    register(chat_server, spawn(?MODULE, init, [])).
+    register(?MODULE, spawn(?MODULE, init, [])).
 
 start_link() ->
-    register(chat_server, spawn_link(?MODULE, init, [])).
+    register(?MODULE, spawn_link(?MODULE, init, [])).
 
 init() ->
     process_flag(trap_exit, true),
@@ -30,6 +30,21 @@ loop(State) ->
                     Pid ! {Ref, {ok, joined}},
                     loop([User | State])
             end;
+        {Pid, Ref, leave} ->
+            {RemovedName, NewState} = remove_user_by_pid(Pid, State),
+            case RemovedName of
+                not_found ->
+                    Pid ! {Ref, {error, not_found}},
+                    loop(State);
+                _ ->
+                    unlink(Pid),
+                    lists:foreach(fun(U) ->
+                        U#user.pid ! {user_left, RemovedName}
+                    end, NewState),
+                    Pid ! {Ref, {ok, left}},
+                    io:format("User ~s left the room.~n", [RemovedName]),
+                    loop(NewState)
+                    end;
         {'EXIT', Pid, Reason} ->
             {RemovedName, NewState} = remove_user_by_pid(Pid, State),
             case RemovedName of
@@ -44,8 +59,7 @@ loop(State) ->
                     loop(NewState)
             end;
         shutdown ->
-            io:format("Server shutting down~n"),
-            ok;
+            exit(shutdown);
         Unknown ->
             io:format("Unknown message: ~p~n",[Unknown]),
             loop(State)
