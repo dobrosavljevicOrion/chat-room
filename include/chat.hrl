@@ -1,3 +1,4 @@
 -record(user, {name,
-               pid
+               pid,
+               monitor_ref
 }).
