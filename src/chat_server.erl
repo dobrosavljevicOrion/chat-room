@@ -17,48 +17,46 @@ init() ->
 
 loop(State) ->
     receive
-        {Pid, Ref, {join, Name}} ->
-            handle_join(Pid, Ref, Name, State);
-        {Pid, Ref, leave} ->
-            handle_leave(Pid, Ref, State);
-        {Pid, Ref, {message, Text}} ->
-            handle_message(Pid, Ref, Text, State);
-        {'EXIT', Pid, Reason} ->
-            handle_exit(Pid, Reason, State);
+        Message when is_tuple(Message) ->
+            handle_message(Message, State);
         shutdown ->
+            notify_users(server_down, State),
+            io:format("Server shuts down.~n"),
             exit(shutdown);
         Unknown ->
             io:format("Unknown message: ~p~n", [Unknown]),
             loop(State)
     end.
 
-handle_join(Pid, Ref, Name, State) ->
+% Handlers
+
+handle_message({Pid, Ref, {join, Name}}, State) ->
     case username_exists(Name, State) of
         true ->
             Pid ! {Ref, {error, username_taken}},
             loop(State);
         false ->
-            User = #user{name = Name, pid = Pid},
-            link(Pid),
+            MonitorRef = erlang:monitor(process, Pid),
+            User = #user{name = Name, pid = Pid, monitor_ref = MonitorRef},
             notify_users({user_joined, Name}, State),
             Pid ! {Ref, {ok, joined}},
             loop([User | State])
-    end.
+    end;
 
-handle_leave(Pid, Ref, State) ->
+handle_message({Pid, Ref, leave}, State) ->
     case remove_user_by_pid(Pid, State) of
         {not_found, _} ->
             Pid ! {Ref, {error, not_found}},
             loop(State);
-        {RemovedName, NewState} ->
-            unlink(Pid),
-            notify_users({user_left, RemovedName}, NewState),
+        {RemovedUser, NewState} ->
+            erlang:demonitor(RemovedUser#user.monitor_ref, [flush]),
+            notify_users({user_left, RemovedUser#user.name}, NewState),
             Pid ! {Ref, {ok, left}},
-            io:format("User ~s left the room.~n", [RemovedName]),
+            io:format("User ~s left the room.~n", [RemovedUser#user.name]),
             loop(NewState)
-    end.
+    end;
 
-handle_message(Pid, Ref, Text, State) ->
+handle_message({Pid, Ref, {message, Text}}, State) ->
     case find_user_by_pid(Pid, State) of
         not_found ->
             Pid ! {Ref, {error, not_registered}},
@@ -68,18 +66,24 @@ handle_message(Pid, Ref, Text, State) ->
             broadcast_message(Pid, Sender, Text, State),
             Pid ! {Ref, ok},
             loop(State)
-    end.
+    end;
 
-handle_exit(Pid, Reason, State) ->
+handle_message({'DOWN', _MonitorRef, process, Pid, Reason}, State) ->
     case remove_user_by_pid(Pid, State) of
         {not_found, _} ->
-            io:format("Received EXIT from unknown pid ~p, reason: ~p~n", [Pid, Reason]),
+            io:format("Received DOWN from unknown pid ~p, reason: ~p~n", [Pid, Reason]),
             loop(State);
-        {RemovedName, NewState} ->
-            notify_users({user_disconnected, RemovedName}, NewState),
-            io:format("User ~s crashes/exits.~n", [RemovedName]),
+        {RemovedUser, NewState} ->
+            notify_users({user_disconnected, RemovedUser#user.name}, NewState),
+            io:format("User ~s disconnected. Reason: ~p~n", [RemovedUser#user.name, Reason]),
             loop(NewState)
-    end.
+    end;
+
+
+
+handle_message(Other, State) ->
+    io:format("Debug: unknown tuple message ~p~n", [Other]),
+    loop(State).
 
 username_exists(Name, State) ->
     lists:any(fun(U) -> U#user.name =:= Name end, State).
@@ -102,16 +106,6 @@ broadcast_message(SenderPid, SenderName, Text, Users) ->
 terminate() ->
     ?MODULE ! shutdown.
 
-join(Name) ->
-    Ref = make_ref(),
-    ?MODULE ! {self(), Ref, {join, Name}},
-    receive
-        {Ref, Reply} ->
-            Reply
-    after 5000 ->
-        {error, timeout}
-    end.
-
 remove_user_by_pid(Pid, State) ->
     remove_user_by_pid(Pid, State, []).
 remove_user_by_pid(_, [], Acc) ->
@@ -119,7 +113,7 @@ remove_user_by_pid(_, [], Acc) ->
 remove_user_by_pid(Pid, [U | Rest], Acc) ->
     case U#user.pid =:= Pid of
         true ->
-            {U#user.name, lists:reverse(Acc) ++ Rest};
+            {U, lists:reverse(Acc) ++ Rest};
         false ->
             remove_user_by_pid(Pid, Rest, [U | Acc])
     end.
